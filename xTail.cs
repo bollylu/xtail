@@ -1,30 +1,26 @@
+using BLTools;
+using BLTools.Debugging;
 using System;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Collections;
-using System.Collections.Generic;
-using BLTools;
-using BLTools.Debugging;
-using System.Diagnostics;
 
 namespace xtail {
+
   /// <summary>
   /// Display the content of a text file in pseudo real-time as data are added inside.
   /// The display can be filtered by line.
   /// It can be displayed in full line or columns, eventually formatted
   /// </summary>
-
   class xTail {
 
     /// <summary>
     /// The main entry point for the application.
     /// </summary>
-    [STAThread]
     static void Main(string[] args) {
 
-      string TempStr;
+      string NextLine;
       long EofPosition = 0;
       long CurrentPosition = 0;
       BinaryReader oReader = null;
@@ -42,45 +38,45 @@ namespace xtail {
 
       TColInfoCollection ColumnList = new TColInfoCollection();
 
-      SplitArgs oArgs = new SplitArgs(args);
+      SplitArgs Args = new SplitArgs(args);
 
       #region Parameters
 
-      if (oArgs.Count == 0 || oArgs.IsDefined("help")) {
+      if ( Args.Count == 0 || Args.IsDefined("help") || Args.IsDefined("?")) {
         Usage();
         Environment.Exit(1);
       }
 
-      if (oArgs.IsDefined("debug")) {
+      if ( Args.IsDefined("debug") ) {
         TraceFactory.AddTraceConsole();
       }
 
       #region filter
-      string Filter = oArgs.GetValue<string>("filter", "");
+      string Filter = Args.GetValue<string>("filter", "");
       Regex xFilter = null;
       try {
-        xFilter = new Regex(oArgs.GetValue<string>("xfilter", ""));
-      } catch (Exception ex) {
+        xFilter = new Regex(Args.GetValue<string>("xfilter", ""));
+      } catch ( Exception ex ) {
         Console.WriteLine("Error in regular expression: {0}", ex.Message);
         Environment.Exit(1);
       }
       //FilterActive = oArgs.IsDefined("filter") || oArgs.IsDefined("xfilter");
       #endregion
 
-      IsUnix = oArgs.IsDefined("unix");
+      IsUnix = Args.IsDefined("unix");
 
-      RefreshFrequency = oArgs.IsDefined("freq") ? Math.Min(Math.Max(oArgs.GetValue<int>("freq", 0), 250), 5000) : 1000;
-      BackLines = oArgs.IsDefined("back") ? Math.Min(Math.Max(oArgs.GetValue<int>("back", 0), 1), 1000) : 15;
+      RefreshFrequency = Args.IsDefined("freq") ? Math.Min(Math.Max(Args.GetValue<int>("freq", 0), 250), 5000) : 1000;
+      BackLines = Args.IsDefined("back") ? Math.Min(Math.Max(Args.GetValue<int>("back", 0), 1), 1000) : 15;
 
-      if (oArgs.IsDefined("filter") && oArgs.IsDefined("xfilter")) {
+      if ( Args.IsDefined("filter") && Args.IsDefined("xfilter") ) {
         Usage();
         Environment.Exit(1);
       }
 
-      FileName = oArgs.GetValue<string>("file", "");
+      FileName = Args.GetValue<string>("file", "");
       Encoding EncodingValue;
 
-      switch (oArgs.GetValue<string>("encoding", "").ToLower()) {
+      switch ( Args.GetValue<string>("encoding", "").ToLower() ) {
         case "ansi":
           EncodingValue = Encoding.Default;
           break;
@@ -101,25 +97,25 @@ namespace xtail {
 
       #region folder
       try {
-        if (oArgs.IsDefined("folder")) {
-          if (oArgs.IsDefined("pattern")) {
-            Console.WriteLine("Searching for last written filename of type {0} in folder {1}", oArgs.GetValue<string>("pattern", ""), oArgs.GetValue<string>("folder", ""));
-            DirectoryInfo oDirectoryInfo = new DirectoryInfo(oArgs.GetValue<string>("folder", ""));
-            FileInfo[] aFileInfo = oDirectoryInfo.GetFiles(oArgs.GetValue<string>("pattern", ""));
+        if ( Args.IsDefined("folder") ) {
+          if ( Args.IsDefined("pattern") ) {
+            Console.WriteLine("Searching for last written filename of type {0} in folder {1}", Args.GetValue<string>("pattern", ""), Args.GetValue<string>("folder", ""));
+            DirectoryInfo oDirectoryInfo = new DirectoryInfo(Args.GetValue<string>("folder", ""));
+            FileInfo[] aFileInfo = oDirectoryInfo.GetFiles(Args.GetValue<string>("pattern", ""));
             Console.WriteLine(" -> found {0} files to scan", aFileInfo.Length);
-            Array.Sort<FileInfo>(aFileInfo, (f1, f2) => { int CompResult; if ((CompResult = DateTime.Compare(f1.LastWriteTime, f2.LastWriteTime)) == 0) return string.Compare(f1.Name, f2.Name); else return CompResult; });
+            Array.Sort<FileInfo>(aFileInfo, (f1, f2) => { int CompResult; if ( ( CompResult = DateTime.Compare(f1.LastWriteTime, f2.LastWriteTime) ) == 0 ) return string.Compare(f1.Name, f2.Name); else return CompResult; });
             FileName = aFileInfo[aFileInfo.Length - 1].FullName;
             Console.WriteLine(" -> found file : {0}", FileName);
           } else {
             Console.WriteLine("[folder] parameter cannot be used without pattern. Please specify.");
           }
         }
-      } catch (Exception ex) {
+      } catch ( Exception ex ) {
         Console.WriteLine("Error processing [folder] and [pattern] parameters : {0}", ex.Message);
       }
       #endregion
 
-      if (FileName == "") {
+      if ( FileName == "" ) {
         Usage();
         Environment.Exit(1);
       }
@@ -127,9 +123,10 @@ namespace xtail {
       Console.WriteLine("Working with {0}", FileName);
 
       #region Columns
-      if (oArgs.IsDefined("columns")) {
-        if (oArgs.IsDefined("separator")) {
-          switch (oArgs.GetValue<string>("separator", "").ToLower()) {
+      if ( Args.IsDefined("columns") ) {
+
+        if ( Args.IsDefined("separator") ) {
+          switch ( Args.GetValue<string>("separator", "").ToLower() ) {
             case "tab":
               aSeparators = new char[] { '\t' };
               break;
@@ -140,66 +137,69 @@ namespace xtail {
               aSeparators = new char[] { '|' };
               break;
             default:
-              aSeparators = oArgs.GetValue<string>("separator", "").ToCharArray(0, 1);
+              aSeparators = Args.GetValue<string>("separator", "").ToCharArray(0, 1);
               break;
           }
         }
-        foreach (string sColumn in oArgs.GetValue<string>("columns", "").Split(new char[] { ';' })) {
-          string[] aItem = sColumn.Split(new char[] { ':' });
+
+        foreach ( string ColumnItem in Args.GetValue<string>("columns", "").Split(new char[] { ';' }) ) {
+          string[] ColumnItemComponents = ColumnItem.Split(new char[] { ':' });
           try {
-            ColumnList.Add(new TColInfo(aItem[0], Int32.Parse(aItem[1]), Boolean.Parse(aItem[2])));
+            ColumnList.Add(new TColInfo(ColumnItemComponents[0], Int32.Parse(ColumnItemComponents[1]), Boolean.Parse(ColumnItemComponents[2])));
           } catch { }
         }
+
       }
-      #endregion
+      #endregion Columns
+
       #endregion Parameters
 
       #region Main process
-      Trace.WriteLine("Main process");
-      while (true) {
+      //Trace.WriteLine("Main process");
+      while ( true ) {
         try {
-          fs = File.Open(FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-          bfs = new BufferedStream(fs);
-          oReader = new BinaryReader(bfs, EncodingValue);
-        } catch (Exception ex) {
+          using ( fs = File.Open(FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite) ) {
+            using ( bfs = new BufferedStream(fs) ) {
+              using ( oReader = new BinaryReader(bfs, EncodingValue) ) {
+
+                #region Set EOF value, CurrentPosition and BaseStream Position
+                if ( FirstPass == true ) {
+                  FirstPass = false;
+                  SetPosAtLine(oReader, BackLines, IsUnix);
+                  CurrentPosition = oReader.BaseStream.Position;
+                } else {
+                  oReader.BaseStream.Position = CurrentPosition;
+                }
+
+                EofPosition = FindEofPos(oReader);
+                #endregion Set EOF value, CurrentPosition and BaseStream Position
+
+                while ( CurrentPosition < EofPosition ) {
+                  NextLine = GetNextLine(oReader, EofPosition);
+                  CurrentPosition = oReader.BaseStream.Position;
+
+                  if ( Args.IsDefined("filter") || Args.IsDefined("xfilter") ) {
+                    if ( ( Args.IsDefined("filter") && ( NextLine.IndexOf(Filter) != -1 ) ) ) {
+                      Output(NextLine, ColumnList, aSeparators);
+                    }
+
+                    if ( Args.IsDefined("xfilter") && xFilter.IsMatch(NextLine) ) {
+                      Output(NextLine, ColumnList, aSeparators);
+                    }
+                  } else {
+                    Output(NextLine, ColumnList, aSeparators);
+                  }
+                }
+
+              }
+            }
+          }
+
+        } catch ( Exception ex ) {
           Console.WriteLine("Error opening file : {0}", ex.Message);
           Environment.Exit(1);
         }
 
-        #region Set EOF value, CurrentPosition and BaseStream Position
-        if (FirstPass == true) {
-          FirstPass = false;
-          SetPosAtLine(oReader, BackLines, IsUnix);
-          CurrentPosition = oReader.BaseStream.Position;
-        } else {
-          oReader.BaseStream.Position = CurrentPosition;
-        }
-
-        EofPosition = FindEofPos(oReader);
-        #endregion Set EOF value, CurrentPosition and BaseStream Position
-
-        while (CurrentPosition < EofPosition) {
-          TempStr = GetNextLine(oReader, EofPosition);
-          CurrentPosition = oReader.BaseStream.Position;
-
-          if (oArgs.IsDefined("filter") || oArgs.IsDefined("xfilter")) {
-            if ((oArgs.IsDefined("filter") && (TempStr.IndexOf(Filter) != -1))) {
-              Output(TempStr, ColumnList, aSeparators);
-            }
-
-            if (oArgs.IsDefined("xfilter") && xFilter.IsMatch(TempStr)) {
-              Output(TempStr, ColumnList, aSeparators);
-            }
-          } else {
-            Output(TempStr, ColumnList, aSeparators);
-          }
-        }
-
-        #region Closing
-        oReader.Close();
-        bfs.Close();
-        fs.Close();
-        #endregion Closing
         Thread.Sleep(RefreshFrequency);
 
       } // while
@@ -225,20 +225,20 @@ namespace xtail {
       try {
         NextChar = CHR_NULL;
         do {
-          if (reader.BaseStream.Position < EofPos) {
+          if ( reader.BaseStream.Position < EofPos ) {
             NextChar = reader.Read();
-            if (NextChar == CHR_CR && reader.BaseStream.Position < EofPos && reader.PeekChar() == CHR_LF) {
+            if ( NextChar == CHR_CR && reader.BaseStream.Position < EofPos && reader.PeekChar() == CHR_LF ) {
               NextChar = reader.Read();
               LineCompleted = true;
-            } else if (NextChar == CHR_LF) {
+            } else if ( NextChar == CHR_LF ) {
               LineCompleted = true;
-            } else if (NextChar != CHR_CR && NextChar != CHR_EOF && NextChar != CHR_NULL) {
+            } else if ( NextChar != CHR_CR && NextChar != CHR_EOF && NextChar != CHR_NULL ) {
               TempStr.Append((char)NextChar);
               LineCompleted = false;
             }
           }
-        } while ((reader.BaseStream.Position < EofPos) && (!LineCompleted));
-      } catch (Exception ex) {
+        } while ( ( reader.BaseStream.Position < EofPos ) && ( !LineCompleted ) );
+      } catch ( Exception ex ) {
         Console.WriteLine("EOF reached : {0}", ex.Message);
         Console.WriteLine("EofPos=" + EofPos.ToString() + "  oReader.BaseStream.Length=" + reader.BaseStream.Length.ToString());
       }
@@ -262,25 +262,25 @@ namespace xtail {
 
       reader.BaseStream.Position = FindEofPos(reader);
 
-      while ((reader.BaseStream.Position > 0) && (LineCount <= lineBack)) {
+      while ( ( reader.BaseStream.Position > 0 ) && ( LineCount <= lineBack ) ) {
 
         reader.BaseStream.Position--;
 
-        if (unixEOL) {
-          if (reader.PeekChar() == CHR_LF) {
+        if ( unixEOL ) {
+          if ( reader.PeekChar() == CHR_LF ) {
             LineCount++;
             Console.Write(".");
           }
         } else {
-          if (reader.PeekChar() == CHR_LF && PreviousWasLF) {
+          if ( reader.PeekChar() == CHR_LF && PreviousWasLF ) {
             PreviousWasLF = true;
             LineCount++;
             Console.Write(".");
 
-          } else if (reader.PeekChar() == CHR_LF) {
+          } else if ( reader.PeekChar() == CHR_LF ) {
             PreviousWasLF = true;
 
-          } else if (reader.PeekChar() == CHR_CR && PreviousWasLF) {
+          } else if ( reader.PeekChar() == CHR_CR && PreviousWasLF ) {
             PreviousWasLF = false;
             LineCount++;
             Console.Write(".");
@@ -292,7 +292,7 @@ namespace xtail {
         }
       }
 
-      if (reader.BaseStream.Position > 0) {
+      if ( reader.BaseStream.Position > 0 ) {
         reader.BaseStream.Position++;
       }
       Console.WriteLine();
@@ -307,7 +307,7 @@ namespace xtail {
     /// <returns>The EOF position</returns>
     static long FindEofPos(BinaryReader reader) {
       // test for empty file
-      if (reader.BaseStream.Length == 0) {
+      if ( reader.BaseStream.Length == 0 ) {
         return 0;
       }
 
@@ -316,19 +316,19 @@ namespace xtail {
       const int CHR_NULL = 0;
 
       reader.BaseStream.Position = reader.BaseStream.Length;
-      if (reader.PeekChar() != CHR_NULL) {
+      if ( reader.PeekChar() != CHR_NULL ) {
         // No NULL at the end-of-file
         reader.BaseStream.Position = CurrentPosition;
         return reader.BaseStream.Length;
       }
 
       // read backward into the file in 256 bytes block while in '0' chars
-      while (reader.PeekChar() == CHR_NULL) {
+      while ( reader.PeekChar() == CHR_NULL ) {
         reader.BaseStream.Position -= Math.Min(reader.BaseStream.Position, 256);
       }
 
       // read forward into the last block while in non '0' chars
-      while ((reader.BaseStream.Position < reader.BaseStream.Length) && (reader.PeekChar() != CHR_NULL)) {
+      while ( ( reader.BaseStream.Position < reader.BaseStream.Length ) && ( reader.PeekChar() != CHR_NULL ) ) {
         reader.BaseStream.Position++;
       }
 
@@ -347,13 +347,13 @@ namespace xtail {
       string[] aTemp;
       int iColsToBeDisplayed;
 
-      if (columnList.Count > 0) {
+      if ( columnList.Count > 0 ) {
         aTemp = sTemp.Split(aSeparators);
         iColsToBeDisplayed = Math.Min(columnList.Count, aTemp.Length);
-        for (int i = 0; i < iColsToBeDisplayed; i++) {
+        for ( int i = 0; i < iColsToBeDisplayed; i++ ) {
           TColInfo oItem = columnList[i];
-          if (oItem.Enabled) {
-            if (oItem.Length != 0) {
+          if ( oItem.Enabled ) {
+            if ( oItem.Length != 0 ) {
               Console.Write("{0," + oItem.Length.ToString() + "}|", aTemp[i].Trim());
             } else {
               Console.Write("{0}\t", aTemp[i]);
@@ -370,8 +370,8 @@ namespace xtail {
     /// Display Usage
     /// </summary>
     static void Usage() {
-      Console.WriteLine("xtail v3.3 - (c) 2007-2013 Luc Bolly - lbolly@hotmail.com");
-      Console.WriteLine("Usage: xtail /help");
+      Console.WriteLine("xtail v3.3.1 - (c) 2007-2017 Luc Bolly - lbolly@hotmail.com");
+      Console.WriteLine("Usage: xtail /help | /?");
       Console.WriteLine("       xtail /file=filename | /folder=path /pattern=pattern file");
       Console.WriteLine("             [/filter=\"string\"|/xfilter=\"regex\"]");
       Console.WriteLine("             [/freq=refresh frequency in msec] [/back=number of lines]");
